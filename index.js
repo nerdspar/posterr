@@ -27,6 +27,15 @@ const links = require("./classes/custom/links");
 const awtrix = require("./classes/custom/awtrix");
 const movieTrailers = require("./classes/arr/radarrtrailers");
 
+// Optional Jellyfin media server class (safe require - won't crash if file missing)
+let jellyfinMS = null;
+try {
+  jellyfinMS = require("./classes/mediaservers/jellyfin");
+} catch (e) {
+  jellyfinMS = null;
+  // console.log("Jellyfin media server adapter not present, continuing without it.");
+}
+
 // just in case someone puts in a / for the basepath value
 if (process.env.BASEPATH == "/") process.env.BASEPATH = "";
 let BASEURL = process.env.BASEPATH || "";
@@ -368,288 +377,7 @@ async function loadRadarrComingSoon() {
     let now = new Date();
     console.log(now.toLocaleString() + " *Coming Soon - Movies: " + err);
     radarrTicks = 60000;
-    console.log("✘✘ WARNING ✘✘ - Next Radarr query will run in 1 minute.");
-    isRadarrUnavailable = true;
-  }
-  // restart the 24 hour timer
-  radarrClock = setInterval(loadRadarrComingSoon, radarrTicks); // daily
-
-// Temporarily do the radarr trailer call
-    
-//let mt = new movieTrailers()
-//  rtCards = await mt.AssembleRadarrTrailers(csrCards,"xx")
-
-  return csrCards;
-}
-
-/**
- * @desc Wrapper function to call Sonarr coming soon.
- * @returns {Promise<object>} mediaCards array - coming soon
- */
-async function loadSonarrComingSoon() {
-  // stop the clock
-  clearInterval(sonarrClock);
-  let sonarrTicks = 86400000; // daily
-
-  // stop timers and dont run if disabled
-  if (!isSonarrEnabled) {
-    return csCards;
-  }
-
-  // instatntiate sonarr class
-  let sonarr = new sonr(
-    loadedSettings.sonarrURL,
-    loadedSettings.sonarrToken,
-    loadedSettings.sonarrPremieres
-  );
-  // set up date range and date formats
-  let today = new Date();
-  let later = new Date();
-  later.setDate(later.getDate() + loadedSettings.sonarrCalDays);
-  let now = today.toISOString().split("T")[0];
-  let ltr = later.toISOString().split("T")[0];
-
-  // call sonarr coming soon
-  try {
-    csCards = await sonarr.GetComingSoon(
-      now,
-      ltr,
-      loadedSettings.sonarrPremieres,
-      loadedSettings.playThemes,
-      loadedSettings.hasArt
-    );
-
-    if (isSonarrUnavailable) {
-      console.log(
-        "✅ Sonarr connection restored - defualt poll timers restored"
-      );
-      isSonarrUnavailable = false;
-      sonarrTicks = 86400000; // daily
-    }
-  } catch (err) {
-    let now = new Date();
-    console.log(now.toLocaleString() + " *Coming Soon - TV: " + err);
-    sonarrTicks = 60000;
-    console.log("✘✘ WARNING ✘✘ - Next Sonarr query will run in 1 minute.");
-    isSonarrUnavailable = true;
-  }
-
-  // restart the 24 hour timer
-  sonarrClock = setInterval(loadSonarrComingSoon, sonarrTicks);
-  return csCards;
-}
-
-/**
- * @desc Wrapper function to call Readarr coming soon.
- * @returns {Promise<object>} mediaCards array - coming soon
- */
-async function loadPictures() {
-  // stop the clock
-  clearInterval(picturesClock);
-  let picturesTicks = 1200000; // refreshed every 20 minutes
-
-  // stop timers and dont run if disabled
-  if (!isPicturesEnabled) {
-    return picCards;
-  }
-
-  let cPics = new pics();
-  picCards = await cPics.GetPictures(loadedSettings.customPictureTheme, loadedSettings.enableCustomPictureThemes, loadedSettings.hasArt);
-
-  // restart the 24 hour timer
-  picturesClock = setInterval(loadPictures, picturesTicks);
-  return picCards;
-}
-
-/**
- * @desc Wrapper function to call now screening method.
- * @returns {Promise<object>} mediaCards array - results of now screening search
- */
-async function loadNowScreening() {
-
-  // stop the clock
-  clearInterval(nowScreeningClock);
-
-  // stop timers dont run if disabled
-  if (!isPlexEnabled) {
-    nsCards = [];
-    return nsCards;
-  }
-
-  // load MediaServer(s) (switch statement for different server settings server option - TODO)
-  let ms = new pms({
-    plexHTTPS: loadedSettings.plexHTTPS,
-    plexIP: loadedSettings.plexIP,
-    plexPort: loadedSettings.plexPort,
-    plexToken: loadedSettings.plexToken,
-  });
-
-  let excludeLibraries;
-  if(loadedSettings.excludeLibs !== undefined && loadedSettings.excludeLibs !== ""){
-    excludeLibraries = loadedSettings.excludeLibs.split(",");
-    
-    // trim leading and trailing spaces
-    excludeLibraries = excludeLibraries.map(function (el) {
-      return el.trim();
-    });
-  }
-  
-
-  let pollInterval = nsCheckSeconds;
-  // call now screening method
-  try {
-    nsCards = await ms.GetNowScreening(
-      loadedSettings.playThemes,
-      loadedSettings.genericThemes,
-      loadedSettings.hasArt,
-      loadedSettings.filterRemote,
-      loadedSettings.filterLocal,
-      loadedSettings.filterDevices,
-      loadedSettings.filterUsers,
-      loadedSettings.hideUser,
-      excludeLibraries
-    );
-    // Send to Awtrix, if enabled
-    if(isAwtrixEnabled){
-      var awt = new awtrix();
-      var awtrixApps = []; 
-
-      nsCards.forEach(card => {
-        var titleText = card.title.toUpperCase();
-        
-        titleText = titleText.replaceAll("’","'");
-        var appIcon;
-        //console.log(card);
-        var RED = [255,0,0];
-        var GREEN = [0,255,0];
-        var BLUE = [0,0,255];
-        switch(card.mediaType.toLowerCase()) {
-          case 'movie':
-            appColour = RED;
-            appIcon = 1944;
-            break;
-          case 'episode':
-            appColour = BLUE;    
-            titleText = card.title.toUpperCase() + " - " + card.episodeName;
-            appIcon = 2649;            
-              break;
-          case 'track':
-            appColour = GREEN;
-            appIcon = 17668;            
-              break;
-          default:
-            appColour = RED;
-        }
-
-        var customApp = {
-          'text': titleText,
-          'pushIcon': 0,
-          'icon': appIcon,
-          'color': appColour,
-          //'duration': 10,
-          'textCase': 2,
-          'scrollSpeed': 60,
-          'progress': card.progressPercent,
-          'progressC': appColour,
-          'unique': "posterr:" + card.playerIP + ":" + card.playerDevice + ":" + card.title.toUpperCase().replaceAll("’","")
-          };
-
-          try{
-            awtrixApps.push(customApp)
-          }
-          catch(ex){
-            let now = new Date();
-            console.log(now.toLocaleString() + " Failed to communicate with Awtrix. Check Awtrix settings/device, then restart poster - " + ex);
-            isAwtrixEnabled = false;
-          }
-      });
-      
-        if (isNowShowingEnabled && isAwtrixEnabled) {  
-          // add or update now playing item
-          await awtrixApps.reduce(async (memo, md) => {
-            await memo;
-            awtrixIP = loadedSettings.awtrixIP;
-            const result = await awt.appFind(oldAwtrixApps,md.unique);
-            // add to awtrix if not there
-            if(result==undefined){
-              try{
-                await awt.post(awtrixIP,md);
-              }
-              catch(ex){
-                let now = new Date();
-                console.log(now.toLocaleString() + " Failed to communicate with Awtrix. Check Awtrix settings/device, then restart poster. " + ex);
-                isAwtrixEnabled = false;
-              }
-              oldAwtrixApps.push(md);
-              let now = new Date();
-              console.log(now.toLocaleString() + " Awtrix add: " + md.text);
-            }
-            else{
-              // update if progress has changed
-              if(result.progress !== md.progress){
-                // find array item id to update
-                const index = oldAwtrixApps.map(function (e) {
-                  return e.text
-                  }).indexOf(md.text);
-                //console.log("Awtrix: History index of item to update:" + index);
-
-                // remove from old array and add with new value
-                oldAwtrixApps.splice(index,1)
-                oldAwtrixApps.push(md);
-
-                // upate with new value
-                try{
-                  await awt.post(awtrixIP,md);
-                }
-                catch(ex){
-                  let now = new Date();
-                  console.log(now.toLocaleString() + " - Failed to communicate with Awtrix. Check Awtrix settings/device, then restart poster. " + ex);
-                  isAwtrixEnabled = false;
-                }
-                let now = new Date();
-              //console.log(now.toLocaleString() + " Awtrix update: " + md.text + " - " + result.progress + "% --> " + md.progress +"%");
-              }
-
-            }
-          }, undefined);
-
-          // remove item if no longer playing
-          await oldAwtrixApps.reduce(async (memo, md) => {
-            await memo;
-            const result = await awt.appFind(awtrixApps,md.unique);
-            // remove from awtrix if not playing
-            if(result==undefined){
-              // remove from display
-              await awt.delete(awtrixIP,md.unique);
-              // find index
-              const index = oldAwtrixApps.map(function (e) {
-                return e.text
-                }).indexOf(md.text);
-              //console.log("Awtrix: History index of item to update:" + index);
-
-              // remove from old array and add with new value
-              oldAwtrixApps.splice(index,1)
-
-              let now = new Date();
-              console.log(now.toLocaleString() + " Awtrix removed: " + md.text);
-            }
-          }, undefined);
-        }
-      }
-
-    // restore defaults if plex now available after an error
-    if (isPlexUnavailable) {
-      console.log("✅ Plex connection restored - defualt poll timers restored");
-      isPlexUnavailable = false;
-    }
-  } catch (err) {
-    let now = new Date();
-    console.log(now.toLocaleString() + " *Now Showing. - Get full data: " + err);
-    pollInterval = nsCheckSeconds + 60000;
-    console.log(
-      "✘✘ WARNING ✘✘ - Next Now Screening query will be delayed by 1 minute:",
-      "(" + pollInterval / 1000 + " seconds)"
-    );
+    console.log("✘✘ WARNING ✘✘ - Next Now Screening query will be delayed by 1 minute:", "(" + pollInterval / 1000 + " seconds)" );
     isPlexUnavailable = true;
   }
 
@@ -839,12 +567,27 @@ async function loadOnDemand() {
   }
 
   // load MediaServer(s) (switch statement for different server settings server option - TODO)
-  let ms = new pms({
-    plexHTTPS: loadedSettings.plexHTTPS,
-    plexIP: loadedSettings.plexIP,
-    plexPort: loadedSettings.plexPort,
-    plexToken: loadedSettings.plexToken,
-  });
+  // Choose Plex or Jellyfin based on loadedSettings.provider (or environment PROVIDER)
+  let ms = null;
+  const provider = (loadedSettings && loadedSettings.provider) ? loadedSettings.provider.toString().toLowerCase() : (process.env.PROVIDER ? process.env.PROVIDER.toString().toLowerCase() : 'plex');
+
+  if (provider === 'jellyfin' && jellyfinMS) {
+    // Expect jellyfinMS constructor to accept a config object similar in intent to pms
+    ms = new jellyfinMS({
+      jellyfinUrl: loadedSettings.jellyfinUrl,
+      jellyfinApiKey: loadedSettings.jellyfinApiKey,
+      userId: loadedSettings.jellyfinUserId,
+      libraries: loadedSettings.jellyfinLibraries,
+      hasArt: loadedSettings.hasArt
+    });
+  } else {
+    ms = new pms({
+      plexHTTPS: loadedSettings.plexHTTPS,
+      plexIP: loadedSettings.plexIP,
+      plexPort: loadedSettings.plexPort,
+      plexToken: loadedSettings.plexToken,
+    });
+  }
 
   try {
     odCards = await ms.GetOnDemand(
@@ -981,16 +724,31 @@ async function checkEnabled() {
     isSleepEnabled = false;
   }
 
-  // check Plex
-  if (
-    (loadedSettings.plexIP !== undefined && loadedSettings.plexIP !== '') &&
-    (loadedSettings.plexToken !== undefined && loadedSettings.plexToken !== '') &&
-    (loadedSettings.plexPort !== undefined && loadedSettings.plexPort !== undefined)
-  ) {
-    isPlexEnabled = true;
-  }
-  else{
-    isPlexEnabled = false;
+  // check Plex OR Jellyfin (we allow selecting provider via loadedSettings.provider or env var PROVIDER)
+  const provider = (loadedSettings && loadedSettings.provider) ? loadedSettings.provider.toString().toLowerCase() : (process.env.PROVIDER ? process.env.PROVIDER.toString().toLowerCase() : 'plex');
+
+  if (provider === 'jellyfin') {
+    // treat jellyfin as "plex enabled" substitute for the rest of the app so minimal UI changes are needed
+    if (
+      (loadedSettings.jellyfinUrl !== undefined && loadedSettings.jellyfinUrl !== '') &&
+      (loadedSettings.jellyfinApiKey !== undefined && loadedSettings.jellyfinApiKey !== '')
+    ) {
+      isPlexEnabled = true;
+    } else {
+      isPlexEnabled = false;
+    }
+  } else {
+    // original Plex checks
+    if (
+      (loadedSettings.plexIP !== undefined && loadedSettings.plexIP !== '') &&
+      (loadedSettings.plexToken !== undefined && loadedSettings.plexToken !== '') &&
+      (loadedSettings.plexPort !== undefined && loadedSettings.plexPort !== undefined)
+    ) {
+      isPlexEnabled = true;
+    }
+    else{
+      isPlexEnabled = false;
+    }
   }
   
   // check on-demand
@@ -1644,6 +1402,38 @@ app.post(
   }
 )
 
+
+// --- Jellyfin image proxy route (add to support authenticated image fetches) ---
+app.get(BASEURL + '/jellyfin/image/:itemId', async (req, res) => {
+  const itemId = req.params.itemId;
+  const type = req.query.type || 'Primary';
+  const maxWidth = req.query.maxWidth || null;
+
+  // Prefer settings from loadedSettings if available; otherwise fall back to env
+  const jellyfinUrl = (loadedSettings && loadedSettings.jellyfinUrl) ? loadedSettings.jellyfinUrl.replace(/\/$/, '') : (process.env.JELLYFIN_URL || null);
+  const jellyfinApiKey = (loadedSettings && loadedSettings.jellyfinApiKey) ? loadedSettings.jellyfinApiKey : (process.env.JELLYFIN_API_KEY || null);
+
+  if (!jellyfinUrl || !jellyfinApiKey) {
+    return res.status(400).send('Jellyfin not configured');
+  }
+  try {
+    let url = `${jellyfinUrl}/Items/${encodeURIComponent(itemId)}/Images/${encodeURIComponent(type)}`;
+    if (maxWidth) url += `?maxWidth=${encodeURIComponent(maxWidth)}`;
+
+    const axios = require('axios');
+    const resp = await axios.get(url, {
+      responseType: 'stream',
+      headers: { 'X-Emby-Token': jellyfinApiKey }
+    });
+
+    res.setHeader('Content-Type', resp.headers['content-type'] || 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    resp.data.pipe(res);
+  } catch (err) {
+    res.status(502).send('Unable to fetch image from Jellyfin');
+  }
+});
+// --- end image proxy route ---
 
 app.post(
   BASEURL + "/logon",
