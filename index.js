@@ -543,7 +543,7 @@ async function loadRadarrComingSoon() {
 }
 
 /**
- * @desc Wrapper function to call on-demand method
+ * @desc Wrapper function to call On-Demand method
  * @returns {Promise<object>} mediaCards array - results of on-demand search
  */
 async function loadOnDemand() {
@@ -1203,6 +1203,97 @@ async function saveReset(formObject) {
   startup(false);
 }
 
+/**
+ * @desc Wrapper function to call Now Screening (Now Playing)
+ * @returns {Promise<object>} mediaCards array - results of now screening
+ */
+async function loadNowScreening() {
+  // stop the clock (if running)
+  clearInterval(nowScreeningClock);
+
+  // if Now Screening feature disabled, clear nsCards and return
+  if (!isNowShowingEnabled) {
+    nsCards = [];
+    // set a default poll interval so startup doesn't crash if used later
+    const defaultPoll = typeof loadedSettings !== 'undefined' && loadedSettings.nowScreeningRefresh ? (loadedSettings.nowScreeningRefresh * 1000) : nsCheckSeconds;
+    nowScreeningClock = setInterval(loadNowScreening, defaultPoll);
+    return nsCards;
+  }
+
+  // compute poll interval (ms). Prefer loadedSettings.nowScreeningRefresh (seconds) otherwise default
+  let pollInterval = nsCheckSeconds;
+  try {
+    if (loadedSettings && loadedSettings.nowScreeningRefresh) {
+      const v = Number(loadedSettings.nowScreeningRefresh);
+      if (!isNaN(v) && v > 0) pollInterval = v * 1000;
+    }
+  } catch (e) {
+    pollInterval = nsCheckSeconds;
+  }
+
+  // If Plex marked as unavailable, back off and retry quickly
+  if (isPlexUnavailable) {
+    pollInterval = 60000; // 1 minute retry when unavailable
+  }
+
+  // select media server provider (Plex or Jellyfin)
+  let ms = null;
+  const provider = (loadedSettings && loadedSettings.provider) ? loadedSettings.provider.toString().toLowerCase() : (process.env.PROVIDER ? process.env.PROVIDER.toString().toLowerCase() : 'plex');
+
+  if (provider === 'jellyfin' && jellyfinMS) {
+    // instantiate Jellyfin adapter - same options shape used in loadOnDemand
+    ms = new jellyfinMS({
+      jellyfinUrl: loadedSettings.jellyfinUrl,
+      jellyfinApiKey: loadedSettings.jellyfinApiKey,
+      userId: loadedSettings.jellyfinUserId,
+      libraries: loadedSettings.jellyfinLibraries,
+      hasArt: loadedSettings.hasArt
+    });
+  } else {
+    // instantiate Plex adapter (existing)
+    ms = new pms({
+      plexHTTPS: loadedSettings.plexHTTPS,
+      plexIP: loadedSettings.plexIP,
+      plexPort: loadedSettings.plexPort,
+      plexToken: loadedSettings.plexToken,
+    });
+  }
+
+  try {
+    // Call media server now-screening method.
+    // Provide sensible defaults for parameters Posterr expects.
+    // Signature for JellyfinMS.GetNowScreening we implemented: (playThemes, genericThemes, hasArt, filterRemote, filterLocal, filterDevices, filterUsers, hideUser, excludeLibraries)
+    const playThemes = loadedSettings.playThemes !== undefined ? loadedSettings.playThemes : true;
+    const genericThemes = loadedSettings.genericThemes !== undefined ? loadedSettings.genericThemes : true;
+    const hasArt = loadedSettings.hasArt !== undefined ? loadedSettings.hasArt : true;
+    const filterRemote = loadedSettings.filterRemote !== undefined ? loadedSettings.filterRemote : false;
+    const filterLocal = loadedSettings.filterLocal !== undefined ? loadedSettings.filterLocal : false;
+    const filterDevices = loadedSettings.filterDevices !== undefined ? loadedSettings.filterDevices : null;
+    const filterUsers = loadedSettings.filterUsers !== undefined ? loadedSettings.filterUsers : null;
+    const hideUser = loadedSettings.hideUser !== undefined ? loadedSettings.hideUser : false;
+    const excludeLibraries = loadedSettings.excludeLibs !== undefined ? loadedSettings.excludeLibs : excludeLibs;
+
+    nsCards = await ms.GetNowScreening(playThemes, genericThemes, hasArt, filterRemote, filterLocal, filterDevices, filterUsers, hideUser, excludeLibraries);
+
+    // If we had previously flagged Plex as unavailable and now we got results, mark restored
+    if (isPlexUnavailable) {
+      console.log("✅ Media server connection restored - Now Screening polling resumed.");
+      isPlexUnavailable = false;
+    }
+  } catch (err) {
+    let d = new Date();
+    console.log(d.toLocaleString() + " *Now Screening - Get full data: " + err);
+    // mark unavailable so other code can adjust intervals/backoff
+    isPlexUnavailable = true;
+  }
+
+  // restart interval timer
+  nowScreeningClock = setInterval(loadNowScreening, pollInterval);
+
+  // return current nsCards
+  return nsCards;
+}
+
 // call all card providers - initial card loads and sets scheduled runs
 //TODO - to remove!    console.log('<< INITIAL START >>');
 startup(true);
@@ -1434,6 +1525,7 @@ app.get(BASEURL + '/jellyfin/image/:itemId', async (req, res) => {
   }
 });
 // --- end image proxy route ---
+
 
 app.post(
   BASEURL + "/logon",
